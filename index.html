@@ -774,9 +774,10 @@ function calcRend(p,eid){const a=sumar(p.vs),d=sumar(p.ds);const total=r2(a.tota
 /* ---------- vistas ---------- */
 function numBol(b){const s=String(b||'').trim();if(/^seguro/i.test(s))return null;const m=s.match(/(\d+)\s*$/);return m?parseInt(m[1],10):null}
 /* series: cuando una empresa cambia la serie (ej. 188 → 189), la numeración empieza aparte */
-const serAct=eid=>{const e=byId(cfg.empresas,eid);return e?String(e.serie||'').trim():''};
-const serIni=eid=>{const e=byId(cfg.empresas,eid);return e?String(e.serieInicial||e.serie||'').trim():''};
-const serieDe=v=>String(v.serie||serIni(v.empresaId)||'');
+const serK=x=>String(x||'').replace(/\D/g,'');
+const serAct=eid=>{const e=byId(cfg.empresas,eid);return e?serK(e.serie):''};
+const serIni=eid=>{const e=byId(cfg.empresas,eid);return e?serK(e.serieInicial||e.serie):''};
+const serieDe=v=>serK(v.serie)||serIni(v.empresaId)||'';
 const chipSerie=v=>{const s=serieDe(v);return s&&s!==serIni(v.empresaId)?` <span class="chip">serie ${esc(s)}</span>`:''};
 /* formato de numeración por empresa: cantidad de dígitos (ej. "4" o "3-4") + serie que se saca sola */
 function rangoDig(eid){const e=byId(cfg.empresas,eid),m=String((e&&e.digitos)||'').match(/^\s*(\d+)\s*(?:-\s*(\d+))?\s*$/);if(!m)return null;const a=+m[1],b=m[2]?+m[2]:a;return a>0&&b>=a?[a,b]:null}
@@ -794,7 +795,7 @@ function validarBol(eid,b){const r=rangoDig(eid),t=String(b||'').trim();if(!r||/
   return `El boleto de ${e.nombre} tiene que tener ${digTxt(r)}${e.serie?` (sin la serie ${e.serie})`:''}. "${t}" no corresponde: revisá el número.`}
 function fmtPh(eid){const r=rangoDig(eid);return r?`${digTxt(r)}`:''}
 function mapaNum(eid,ser){if(ser===undefined)ser=serAct(eid)||serIni(eid);const m=new Map();for(const v of ventas()){if(v.empresaId!==eid||serieDe(v)!==ser)continue;const n=numBol(v.boleto);if(n===null)continue;if(!m.has(n))m.set(n,v)}return m}
-const ignorado=(eid,n,ser)=>{if(ser===undefined)ser=serAct(eid)||serIni(eid);return (cfg.numIgnorados||[]).some(x=>x.e===eid&&x.n===n&&(x.s||serIni(eid))===ser)};
+const ignorado=(eid,n,ser)=>{if(ser===undefined)ser=serAct(eid)||serIni(eid);return (cfg.numIgnorados||[]).some(x=>x.e===eid&&x.n===n&&(serK(x.s)||serIni(eid))===ser)};
 /* talonarios en papel: rangos de numeración que ingresan (ej. Echevarria) */
 let talCache={};
 const tals=eid=>activos(cfg.talonarios||[]).filter(t=>t.e===eid).sort((a,b)=>a.desde-b.desde);
@@ -1749,7 +1750,9 @@ document.addEventListener('change',ev=>{
   if(campo==='nombre'&&!val){render();return}
   if(campo==='digitos'){val=val.replace(/\s/g,'');if(val&&!/^\d+(-\d+)?$/.test(val)){toast('Poné un número (ej. 4) o un rango (ej. 3-4)');render();return}}
   if(campo==='serie'){val=val.replace(/[^\d-]/g,'');const e0=byId(cfg.empresas,id);if(e0&&!e0.serieInicial&&(e0.serie||val)){cfg.empresas=cfg.empresas.map(x=>x.id===id?{...x,serieInicial:String(e0.serie||val)}:x)}}
-  cfg[tipo]=cfg[tipo].map(x=>x.id===id?{...x,[campo]:val}:x);saveCfg();toast(campo==='serie'&&val?`Serie ${val} guardada: desde ahora los boletos nuevos van en esa serie`:'Guardado');
+  const antes=campo==='serie'?serAct(id):null;
+  cfg[tipo]=cfg[tipo].map(x=>x.id===id?{...x,[campo]:val}:x);saveCfg();
+  toast(campo==='serie'&&serK(val)!==antes?`Serie ${val||'(sin serie)'} guardada: los boletos nuevos se controlan aparte de los de la serie anterior`:campo==='digitos'?'Guardado. Revisá que los boletos ya cargados tengan esa cantidad de dígitos':'Guardado');
 });
 
 document.addEventListener('click',async ev=>{
