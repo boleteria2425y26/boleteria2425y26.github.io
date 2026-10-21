@@ -1913,7 +1913,7 @@ const ROLES={duena:'Dueña',empleada:'Vendedora',soporte:'Soporte'};
 function fbCabecera(){
   const u=USR();if(!u)return;let c=document.getElementById('usrchip');
   if(!c){c=document.createElement('span');c.id='usrchip';c.className='usrchip';$('#estado').after(c)}
-  c.innerHTML=`<span>${esc(u.nombre)} · ${ROLES[u.rol]||''}</span><button type="button" id="usr-salir">Salir</button>`;
+  c.innerHTML=`<span>${esc(u.nombre)}</span><button type="button" id="usr-salir">Salir</button>`;
   $('#usr-salir').onclick=()=>fbAuth.signOut();
 }
 function fbSubUsuarios(){
