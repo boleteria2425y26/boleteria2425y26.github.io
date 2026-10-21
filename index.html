@@ -99,7 +99,7 @@ dl.lines .tot{font-weight:700;color:var(--ink);border-top:1px solid var(--line);
 @media (min-width:561px){.item.tal{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) auto}}
 .talrow{padding:10px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap}
 .talbar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:6px 0;max-width:320px}.talbar>i{display:block;height:100%;background:var(--accent,#3d6b45)}
-@media (min-width:561px){.item.emp{grid-template-columns:minmax(0,2fr) minmax(0,.8fr) minmax(0,1.4fr) minmax(0,1fr) auto}}
+@media (min-width:561px){.item.emp{grid-template-columns:minmax(0,1.8fr) minmax(0,.7fr) minmax(0,1.3fr) minmax(0,.9fr) minmax(0,.7fr) auto}}
 .item.m3{grid-template-columns:minmax(0,1fr) auto;padding-bottom:6px;border-bottom:1px solid var(--line)}
 .item.m3 select{grid-column:1/-1;order:3}
 @media (min-width:561px){.item.g6{grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) auto auto}}
@@ -778,7 +778,21 @@ const serAct=eid=>{const e=byId(cfg.empresas,eid);return e?String(e.serie||'').t
 const serIni=eid=>{const e=byId(cfg.empresas,eid);return e?String(e.serieInicial||e.serie||'').trim():''};
 const serieDe=v=>String(v.serie||serIni(v.empresaId)||'');
 const chipSerie=v=>{const s=serieDe(v);return s&&s!==serIni(v.empresaId)?` <span class="chip">serie ${esc(s)}</span>`:''};
-function limpiarBol(eid,b){const s=serAct(eid),ini=serIni(eid),t=String(b||'').trim();for(const p of new Set([s,ini])){if(p&&/^\d+$/.test(t)&&t.length>=p.length+4&&t.startsWith(p))return t.slice(p.length)}return t}
+/* formato de numeración por empresa: cantidad de dígitos (ej. "4" o "3-4") + serie que se saca sola */
+function rangoDig(eid){const e=byId(cfg.empresas,eid),m=String((e&&e.digitos)||'').match(/^\s*(\d+)\s*(?:-\s*(\d+))?\s*$/);if(!m)return null;const a=+m[1],b=m[2]?+m[2]:a;return a>0&&b>=a?[a,b]:null}
+const okLen=(s,r)=>/^\d+$/.test(s)&&s.length>=r[0]&&s.length<=r[1];
+const digTxt=r=>r[0]===r[1]?`${r[0]} números`:`entre ${r[0]} y ${r[1]} números`;
+function limpiarBol(eid,b){const t=String(b||'').trim();if(/^seguro/i.test(t))return t;
+  const r=rangoDig(eid),sers=[...new Set([serAct(eid),serIni(eid)].map(x=>String(x||'').replace(/\D/g,'')).filter(Boolean))];
+  if(!r){for(const p of sers){if(/^\d+$/.test(t)&&t.length>=p.length+4&&t.startsWith(p))return t.slice(p.length)}return t}
+  const neg=/^-/.test(t),ds=t.replace(/\D/g,'');if(!ds)return t;
+  if(okLen(ds,r))return ds;
+  for(const p of sers)for(let L=p.length;L>=2;L--){const suf=p.slice(p.length-L);if(ds.startsWith(suf)&&okLen(ds.slice(L),r))return ds.slice(L)}
+  return t}
+function validarBol(eid,b){const r=rangoDig(eid),t=String(b||'').trim();if(!r||/^seguro/i.test(t))return '';
+  if(okLen(t,r))return '';const e=byId(cfg.empresas,eid);
+  return `El boleto de ${e.nombre} tiene que tener ${digTxt(r)}${e.serie?` (sin la serie ${e.serie})`:''}. "${t}" no corresponde: revisá el número.`}
+function fmtPh(eid){const r=rangoDig(eid);return r?`${digTxt(r)}`:''}
 function mapaNum(eid,ser){if(ser===undefined)ser=serAct(eid)||serIni(eid);const m=new Map();for(const v of ventas()){if(v.empresaId!==eid||serieDe(v)!==ser)continue;const n=numBol(v.boleto);if(n===null)continue;if(!m.has(n))m.set(n,v)}return m}
 const ignorado=(eid,n,ser)=>{if(ser===undefined)ser=serAct(eid)||serIni(eid);return (cfg.numIgnorados||[]).some(x=>x.e===eid&&x.n===n&&(x.s||serIni(eid))===ser)};
 /* talonarios en papel: rangos de numeración que ingresan (ej. Echevarria) */
@@ -811,6 +825,7 @@ function huecos(){
 }
 let avisoH='';
 $('#v-bol').addEventListener('input',()=>{avisoH=''});
+$('#v-bol').addEventListener('blur',()=>{const eid=$('#v-emp').value,t=$('#v-bol').value.trim();if(!eid||!t)return;const nb=limpiarBol(eid,t);if(nb!==t)$('#v-bol').value=nb;const er=validarBol(eid,nb);if(er){avisoH=`<span class="mal">${esc(er)}</span>`;$('#v-hint').innerHTML=avisoH}});
 function avisoHueco(eid,boleto){
   const n=numBol(boleto);if(n===null)return;const m=mapaNum(eid),e=byId(cfg.empresas,eid);
   if(tals(eid).length){const t=talDe(eid,n);
@@ -830,9 +845,10 @@ function renderHuecos(){
 }
 function buscarBoleto(){
   const q=$('#bus-n').value.trim(),el=$('#bus-out');if(!q){el.innerHTML='';return}
-  const n=numBol(q),l=ventas().filter(v=>String(v.boleto).includes(q)||(n!==null&&numBol(v.boleto)===n)).sort((a,b)=>b.ts-a.ts);
+  const cands=[...new Set([q,...activos(cfg.empresas).map(e=>limpiarBol(e.id,q))])],ns=cands.map(numBol).filter(x=>x!==null),n=ns[ns.length-1]??null;
+  const l=ventas().filter(v=>cands.some(c=>String(v.boleto).includes(c))||ns.includes(numBol(v.boleto))).sort((a,b)=>b.ts-a.ts);
   if(!l.length){el.innerHTML=`<div class="hint">No encontré el boleto ${esc(q)}. Si todavía no está cargado, cargalo abajo.</div>`;return}
-  if(l.length===1&&numBol(l[0].boleto)===n){el.innerHTML='';$('#bus-n').value='';return abrirEditor(l[0].id)}
+  if(l.length===1&&ns.includes(numBol(l[0].boleto))){el.innerHTML='';$('#bus-n').value='';return abrirEditor(l[0].id)}
   el.innerHTML=l.slice(0,20).map(v=>`<div class="gasto"><div><b class="mono">${esc(v.boleto)}</b>${chipSerie(v)} · ${esc(v.empresa)} <span class="hint">${dmy(v.fecha)} · ${esc(v.vendedora)} · ${esc(v.destino||'')} · ${fmt(v.importe)}</span> ${estado(v)}</div><span></span><button class="btn small" data-act="editar" data-id="${v.id}">Corregir</button></div>`).join('')+(l.length>20?`<div class="hint">Hay ${l.length} coincidencias, escribí el número completo.</div>`:'');
 }
 $('#f-bus').onsubmit=ev=>{ev.preventDefault();buscarBoleto()};
@@ -842,6 +858,7 @@ function renderVender(){
   const f=hoy();$('#mc-fecha').textContent=fechaLarga(f);
   $('#mc-tit').textContent=vend?`Caja de hoy · ${vend.nombre}`:'Mi caja de hoy';
   const emp=byId(cfg.empresas,$('#v-emp').value), imp=parseFloat($('#v-imp').value);
+  $('#v-bol').placeholder=emp?fmtPh(emp.id):'';
   if(!confirmKey||!confirmKey.startsWith('dup:')){if(avisoH&&!(imp>0))$('#v-hint').innerHTML=avisoH;else $('#v-hint').textContent=emp&&imp>0?`Comisión de esta venta: ${fmt(r2(imp*emp.comision/100))} (${emp.comision}% de ${emp.nombre})`:''}
   $('[data-act="pdf-caja-mia"]').hidden=!downloads||!vend;
   if(!vend){$('#mc-tot').innerHTML='<div class="empty">Elegí tu nombre arriba para ver tu caja.</div>';$('#mc-list').innerHTML='';return}
@@ -933,7 +950,7 @@ function renderConfig(){
     ?`<span class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn small danger" data-act="del-si" data-tipo="${tipo}" data-id="${id}">Quitar</button><button class="btn small" data-act="cancelar">No</button></span>`
     :`<button class="btn small" data-act="del" data-tipo="${tipo}" data-id="${id}">Quitar</button>`;
   const e=activos(cfg.empresas);
-  $('#k-emp').innerHTML=e.length?e.map(x=>`<div class="item emp"><input data-edit="empresas:${x.id}:nombre" value="${esc(x.nombre)}" aria-label="Nombre"><input class="num" type="number" min="0" max="100" step="0.01" data-edit="empresas:${x.id}:comision" value="${x.comision}" aria-label="Comisión %"><input data-edit="empresas:${x.id}:dias" value="${esc(x.dias||'')}" placeholder="Días de rendición" aria-label="Días de rendición"><input class="num" inputmode="numeric" data-edit="empresas:${x.id}:serie" value="${esc(x.serie||'')}" placeholder="Serie" title="Serie actual del talonario (ej. 188). Si cambia, poné la nueva y la numeración arranca aparte." aria-label="Serie actual">${delBtn('empresas',x.id)}</div>`).join('')+(e.some(x=>x.serie)?`<div class="hint">Serie: los primeros dígitos que se repiten en todos los boletos (ej. Platabus 188). Se carga solo el número que sigue; si alguien escribe la serie completa, la app la saca sola. Cuando la empresa pase a una serie nueva (ej. 189), cambiala acá: los números de la serie vieja quedan aparte y no se mezclan ni dan falsos faltantes.</div>`:''):'<div class="empty">Cargá tus 5 empresas con su porcentaje de comisión.</div>';
+  $('#k-emp').innerHTML=e.length?e.map(x=>`<div class="item emp"><input data-edit="empresas:${x.id}:nombre" value="${esc(x.nombre)}" aria-label="Nombre"><input class="num" type="number" min="0" max="100" step="0.01" data-edit="empresas:${x.id}:comision" value="${x.comision}" aria-label="Comisión %"><input data-edit="empresas:${x.id}:dias" value="${esc(x.dias||'')}" placeholder="Días de rendición" aria-label="Días de rendición"><input class="num" data-edit="empresas:${x.id}:serie" value="${esc(x.serie||'')}" placeholder="Serie" title="Serie actual: lo que va antes del número y se repite en todos los boletos (ej. 188, o 030-695). Si cambia, poné la nueva y la numeración arranca aparte." aria-label="Serie actual"><input class="num" data-edit="empresas:${x.id}:digitos" value="${esc(x.digitos||'')}" placeholder="Dígitos" title="Cuántos números tiene el boleto sin la serie: 4, 5, o un rango como 3-4. Si alguien carga otra cantidad, la app no lo deja guardar." aria-label="Cantidad de dígitos">${delBtn('empresas',x.id)}</div>`).join('')+`<div class="hint"><b>Serie</b>: lo que va antes del número y se repite en todos los boletos (Platabus 188, Crucero del Norte 030-695). Si alguien la escribe, la app la saca sola. Cuando la empresa pase a una serie nueva, cambiala acá: la numeración vieja queda aparte. <b>Dígitos</b>: cuántos números tiene el boleto sin la serie (4, 5, o 3-4). Si se carga otra cantidad, la app no deja guardar y pide revisar. Las letras (ej. PRN-) se sacan solas.</div>`:'<div class="empty">Cargá tus 5 empresas con su porcentaje de comisión.</div>';
   const v=activos(cfg.vendedoras);
   $('#k-vend').innerHTML=v.length?v.map(x=>`<div class="item"><input data-edit="vendedoras:${x.id}:nombre" value="${esc(x.nombre)}" aria-label="Nombre"><input class="num" type="number" min="0" step="0.01" placeholder="$ hora normal" title="Hora normal" data-edit="vendedoras:${x.id}:valorHora" value="${x.valorHora??''}" aria-label="Valor hora normal"><input class="num" type="number" min="0" step="0.01" placeholder="$ hora finde/feriado" title="Hora fin de semana o feriado" data-edit="vendedoras:${x.id}:valorFinde" value="${x.valorFinde??''}" aria-label="Valor hora fin de semana o feriado">${delBtn('vendedoras',x.id)}</div>`).join(''):'<div class="empty">Agregá a las 4 vendedoras.</div>';
   const du=activos(cfg.duenas),sp=r2(du.reduce((s,d)=>s+(+d.pct||0),0));
@@ -1017,7 +1034,8 @@ async function registrarDevolucion(){
   const mo=r2(parseFloat($('#ed-monto').value)),med=byId(cfg.medios,$('#ed-medio').value);
   if(!(mo>0)||mo>v.importe){toast('Revisá el monto devuelto');return}
   if(!med){toast('Elegí por dónde se devolvió');return}
-  const nb=($('#ed-bol').value||'').trim();
+  const nb=limpiarBol(v.empresaId,($('#ed-bol').value||'').trim());
+  if(nb){const er=validarBol(v.empresaId,nb);if(er){toast(er);return}}
   const ret=r2(v.importe-mo),pct=+v.comisionPct||0,vend=byId(cfg.vendedoras,$('#v-vend').value)||{id:v.vendedoraId,nombre:v.vendedora};
   const nota=$('#e-nota').value.trim();
   try{
@@ -1037,6 +1055,7 @@ async function guardarEdicion(){
   const motivo=$('#e-motivo').value;
   const nuevo={fecha:$('#e-fecha').value||v.fecha,viaje:$('#e-viaje').value,empresaId:$('#e-emp').value,boleto:$('#e-bol').value.trim(),destino:$('#e-dest').value.trim(),importe:r2(parseFloat($('#e-imp').value)),medioId:$('#e-medio').value,canal:$('#e-canal').value};
   if(nuevo.empresaId)nuevo.boleto=limpiarBol(nuevo.empresaId,nuevo.boleto);
+  if(nuevo.boleto!==String(v.boleto)||nuevo.empresaId!==v.empresaId){const er=validarBol(nuevo.empresaId,nuevo.boleto);if(er){toast(er);return}}
   if(v.tipo==='devolucion'||v.devuelto>0){nuevo.importe=v.importe;nuevo.fecha=v.fecha;nuevo.empresaId=v.empresaId;nuevo.medioId=v.medioId}
   if(v.anulada){nuevo.importe=v.importe;nuevo.fecha=v.fecha;nuevo.medioId=v.medioId}
   if(!nuevo.boleto||!(nuevo.importe>0||v.tipo==='devolucion'||v.anulada)){toast('Revisá el boleto y el importe');return}
@@ -1274,11 +1293,11 @@ function avisosPlan(){
   const vs=ventas();let n=0;
   plan.filas.forEach((f,i)=>{
     const a=[];if(f.dudoso&&f.motivo)a.push('Duda: '+f.motivo);
-    if(f.inc){if(!f.boleto)a.push('Falta boleto');if(!f.empresaId)a.push('Falta empresa');if(f.tipo)a.push((TIPOS[f.tipo]||'')+': se carga sin cargo ($0)');else{if(!(f.importe>0))a.push('Falta importe');if(!f.medioId)a.push('Falta medio')}
+    if(f.inc){if(!f.boleto)a.push('Falta boleto');if(f.boleto&&f.empresaId&&validarBol(f.empresaId,f.boleto))a.push('Número mal: '+validarBol(f.empresaId,f.boleto));if(!f.empresaId)a.push('Falta empresa');if(f.tipo)a.push((TIPOS[f.tipo]||'')+': se carga sin cargo ($0)');else{if(!(f.importe>0))a.push('Falta importe');if(!f.medioId)a.push('Falta medio')}
       if(f.boleto&&f.empresaId&&yaCargado(f))a.push('Este boleto ya está cargado');
       n++}
     if(f.obs&&!f.anulado)a.push('Obs.: '+f.obs);
-    const el=$('#p-n'+i);if(el)el.innerHTML=a.map(x=>`<span class="${/Falta|ya está/.test(x)?'mal':''}">${esc(x)}</span>`).join('<br>');
+    const el=$('#p-n'+i);if(el)el.innerHTML=a.map(x=>`<span class="${/Falta|ya está|Número mal/.test(x)?'mal':''}">${esc(x)}</span>`).join('<br>');
   });
   const ok=plan.filas.filter(f=>f.inc&&!f.anulado);
   const leidos=activos(cfg.medios).map(m=>{const suma=r2(ok.filter(f=>f.medioId===m.id).reduce((s,f)=>s+(+f.importe||0),0));const t=plan.totales[m.nombre];return {nombre:m.nombre,suma,hoja:typeof t==='number'?t:null}}).filter(x=>x.suma||x.hoja);
@@ -1287,13 +1306,13 @@ function avisosPlan(){
   $('#p-tot').innerHTML=`<dl class="lines">${leidos.map(x=>fila(x.nombre,x.suma,x.hoja)).join('')}<dt class="tot">TOTAL</dt><dd class="tot">${fila('',total,th).replace(/^<dt><\/dt><dd>|<\/dd>$/g,'')}</dd></dl>`;
   const b=$('#p-cargar');if(b)b.textContent=`Cargar ${n} venta${n===1?'':'s'}`;
 }
-document.addEventListener('input',ev=>{const k=ev.target.dataset&&ev.target.dataset.p;if(!k||!plan)return;const [i,campo]=k.split(':');const val=ev.target.type==='checkbox'?ev.target.checked:campo==='importe'?(parseFloat(ev.target.value)||''):ev.target.value.trim();if(i==='-1')plan[campo]=val;else plan.filas[+i][campo]=val;avisosPlan()});
+document.addEventListener('input',ev=>{const k=ev.target.dataset&&ev.target.dataset.p;if(!k||!plan)return;const [i,campo]=k.split(':');const val=ev.target.type==='checkbox'?ev.target.checked:campo==='importe'?(parseFloat(ev.target.value)||''):ev.target.value.trim();if(i==='-1')plan[campo]=val;else{plan.filas[+i][campo]=val;const f=plan.filas[+i];if((campo==='boleto'||campo==='empresaId')&&f.empresaId&&f.boleto)f.boleto=limpiarBol(f.empresaId,f.boleto)}avisosPlan()});
 async function cargarPlan(){
   if(!plan||!puede())return;
   const vend=byId(cfg.vendedoras,plan.vendedoraId);
   if(!plan.fecha||!vend){$('#p-msg').innerHTML='<span class="mal">Completá la fecha y la vendedora de la planilla.</span>';return}
   const filas=plan.filas.filter(f=>f.inc);
-  const malas=filas.filter(f=>!f.boleto||!f.empresaId||(!f.tipo&&(!(f.importe>0)||!f.medioId)));
+  const malas=filas.filter(f=>!f.boleto||!f.empresaId||validarBol(f.empresaId,limpiarBol(f.empresaId,f.boleto))||(!f.tipo&&(!(f.importe>0)||!f.medioId)));
   if(malas.length){$('#p-msg').innerHTML=`<span class="mal">Faltan datos en la${malas.length>1?'s':''} fila${malas.length>1?'s':''} ${malas.map(f=>f.fila).join(', ')}. Completalas o destildá "Cargar".</span>`;return}
   if(!filas.length)return;
   const b=$('#p-cargar');b.disabled=true;$('#p-msg').textContent='Guardando…';
@@ -1672,9 +1691,10 @@ $('#f-venta').onsubmit=async ev=>{
   const canal=$('#v-canal').value;
   if(!emp||!mp||!boleto||!(sc||importe!==0)){toast(sc?'Completá empresa y boleto':esDev?'Completá empresa, boleto, monto devuelto y por dónde se devolvió':'Completá empresa, boleto, importe y medio de pago');return}
   if(!canal&&!esAnu){toast('Elegí el canal: WhatsApp o Presencial');$('#v-canal').focus();return}
+  {const er=validarBol(emp.id,boleto);if(er){$('#v-hint').innerHTML=`<span class="mal">${esc(er)}</span>`;toast('Revisá el número de boleto');$('#v-bol').focus();return}}
   const serV=serAct(emp.id)||serIni(emp.id);
   const dup=ventas().find(v=>v.empresaId===emp.id&&serieDe(v)===serV&&String(v.boleto)===boleto&&!v.anulada&&(esDev||v.tipo!=='devolucion'));
-  const refB=esDev?$('#v-ref').value.trim():'', orig=refB?ventas().find(v=>v.empresaId===emp.id&&numBol(v.boleto)===numBol(refB)&&v.tipo!=='devolucion'&&!v.anulada):null;
+  const refB=esDev?limpiarBol(emp.id,$('#v-ref').value.trim()):'', orig=refB?ventas().find(v=>v.empresaId===emp.id&&numBol(v.boleto)===numBol(refB)&&v.tipo!=='devolucion'&&!v.anulada):null;
   if(orig&&orig.devuelto>0){toast(`El boleto ${refB} ya tiene una devolución cargada`);return}
   if(orig&&-importe>orig.importe){toast('Lo devuelto no puede ser más que lo que pagó');return}
   if(dup&&confirmKey!=='dup:'+emp.id+boleto){confirmKey='dup:'+emp.id+boleto;$('#v-hint').textContent=`El boleto ${boleto} de ${emp.nombre} ya está cargado (${dup.vendedora}, ${dmy(dup.fecha)}). Tocá Registrar otra vez para cargarlo igual.`;return}
@@ -1727,7 +1747,8 @@ document.addEventListener('change',ev=>{
   if(campo==='comision'||campo==='pct'){val=parseFloat(val);if(!(val>=0&&val<=100)){toast('El porcentaje tiene que ir de 0 a 100');render();return}}
   if(campo==='valorHora'||campo==='valorFinde'){val=parseFloat(val)||0;if(val<0){render();return}}
   if(campo==='nombre'&&!val){render();return}
-  if(campo==='serie'){val=val.replace(/\D/g,'');const e0=byId(cfg.empresas,id);if(e0&&!e0.serieInicial&&(e0.serie||val)){cfg.empresas=cfg.empresas.map(x=>x.id===id?{...x,serieInicial:String(e0.serie||val)}:x)}}
+  if(campo==='digitos'){val=val.replace(/\s/g,'');if(val&&!/^\d+(-\d+)?$/.test(val)){toast('Poné un número (ej. 4) o un rango (ej. 3-4)');render();return}}
+  if(campo==='serie'){val=val.replace(/[^\d-]/g,'');const e0=byId(cfg.empresas,id);if(e0&&!e0.serieInicial&&(e0.serie||val)){cfg.empresas=cfg.empresas.map(x=>x.id===id?{...x,serieInicial:String(e0.serie||val)}:x)}}
   cfg[tipo]=cfg[tipo].map(x=>x.id===id?{...x,[campo]:val}:x);saveCfg();toast(campo==='serie'&&val?`Serie ${val} guardada: desde ahora los boletos nuevos van en esa serie`:'Guardado');
 });
 
