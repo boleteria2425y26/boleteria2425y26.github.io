@@ -1909,7 +1909,7 @@ function conectar(){
 <script>
 /* ===== Versión con servidor propio: usuarios (soporte), importar respaldo y cabecera ===== */
 let fbUsuarios=[],fbUnsubU=null,impMsg='';
-const ROLES={duena:'Dueña',empleada:'Empleada',soporte:'Soporte'};
+const ROLES={duena:'Dueña',empleada:'Vendedora',soporte:'Soporte'};
 function fbCabecera(){
   const u=USR();if(!u)return;let c=document.getElementById('usrchip');
   if(!c){c=document.createElement('span');c.id='usrchip';c.className='usrchip';$('#estado').after(c)}
@@ -1931,13 +1931,13 @@ renderConfig=function(){
   fbSubUsuarios();
   if(!up){up=document.createElement('div');up.className='panel tal-panel';up.id='k-usr-panel';$('#k-resp-panel').before(up)}
   up.hidden=false;
-  const vs=activos(cfg.vendedoras),opt=(sel)=>'<option value="">Sin vendedora</option>'+vs.map(v=>`<option value="${esc(v.id)}"${v.id===sel?' selected':''}>${esc(v.nombre)}</option>`).join('');
+  const vs=activos(cfg.vendedoras),opt=(sel)=>'<option value="">Nombre en las ventas: ninguno</option>'+vs.map(v=>`<option value="${esc(v.id)}"${v.id===sel?' selected':''}>${esc(v.nombre)}</option>`).join('');
   const ropt=sel=>['duena','empleada'].map(k=>`<option value="${k}"${k===sel?' selected':''}>${ROLES[k]}</option>`).join('');
   const lista=fbUsuarios.map(x=>`<div class="talrow"><div style="min-width:0;flex:1"><b>${esc(x.nombre||x.id)}</b> <span class="hint">${esc(x.id)}</span>${x.activo===false?' <span class="chip warn">sin acceso</span>':''}
       <div class="row" style="gap:6px;margin-top:6px"><select data-usr="${esc(x.id)}:rol" aria-label="Rol">${ropt(x.rol)}</select><select data-usr="${esc(x.id)}:vendedoraId" aria-label="Vendedora">${opt(x.vendedoraId)}</select></div></div>
       <span class="row" style="gap:4px">${x.activo===false?`<button class="btn small" data-act="usr-on" data-id="${esc(x.id)}">Dar acceso</button>`:`<button class="btn small" data-act="usr-off" data-id="${esc(x.id)}">Quitar acceso</button>`}</span></div>`).join('');
   up.innerHTML=`<h2>Usuarios <span class="chip">solo soporte</span></h2>
-    <div class="hint"><b>Dueña:</b> ve y maneja todo menos esta lista. <b>Empleada:</b> solo carga ventas y ve su caja del día. "Vendedora" une la cuenta con el nombre que aparece en las ventas. Para dejar entrar a alguien: agregá acá su correo (Gmail, o el que use con contraseña).</div>
+    <div class="hint"><b>Dueña:</b> ve y maneja todo menos esta lista. <b>Vendedora:</b> solo carga ventas y ve su caja del día. El segundo casillero une la cuenta con el nombre que aparece en las ventas. Para dejar entrar a alguien: agregá acá su correo (Gmail, o el que use con contraseña).</div>
     <div class="hint">Soporte: <b>${esc(SOPORTE_EMAIL)}</b> (fijo).</div>
     <div class="list">${lista||'<div class="empty">Todavía no agregaste usuarios.</div>'}</div>
     <form id="f-usr" class="item tal" autocomplete="off">
