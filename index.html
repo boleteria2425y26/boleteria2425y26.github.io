@@ -284,6 +284,18 @@ tr.dudoso td{background:var(--accent-soft)}
     </div>
     <div class="row" style="align-items:center;gap:6px"><span class="label">Ver solo medio de pago:</span><div class="seg" id="r-mf"></div><span class="hint" id="r-mfh"></span></div>
     <div id="r-cards" class="cards"></div>
+    <div class="panel" id="lq-panel">
+      <h3>Controlar contra la liquidación de la empresa</h3>
+      <div class="hint">Guardá en PDF la "Planilla de liquidación" que da la empresa (sistema FICS / Sisorg) y subila acá. La app la compara boleto por boleto con lo cargado: lo que falta cargar, lo que la empresa cobra de más, anulados que no descontó e importes distintos. No cambia nada sola: vos decidís qué hacer con cada diferencia.</div>
+      <div class="row" style="align-items:flex-end">
+        <div class="field" style="flex:1;min-width:220px"><label class="label" for="lq-file">Liquidación en PDF</label><input id="lq-file" type="file" accept="application/pdf,.pdf"></div>
+        <div class="field" style="width:200px"><label class="label" for="lq-emp">Empresa</label><select id="lq-emp"></select></div>
+        <button class="btn primary" data-act="lq-go">Controlar</button>
+      </div>
+      <details><summary class="hint">No tengo el PDF: pegar el texto de la página</summary><textarea id="lq-txt" rows="4" style="width:100%" placeholder="En la página de la liquidación: Ctrl + A, Ctrl + C, y pegalo acá"></textarea></details>
+      <div class="hint" id="lq-msg"></div>
+      <div id="lq-out"></div>
+    </div>
     <div class="panel">
       <h3>Descuentos y ajustes a las rendiciones</h3>
       <div class="hint">Lo que se descuenta (o se suma) a lo que hay que entregarle a una empresa. Se aplica en la próxima rendición de esa empresa y queda escrito en el comprobante. Los pasajes anulados no hace falta cargarlos acá: se descuentan solos.</div>
@@ -732,6 +744,7 @@ function fillSelects(){
   fillSelect($('#c-fv'),cfg.vendedoras,{placeholder:'Todas'});
   fillSelect($('#c-fe'),cfg.empresas,{placeholder:'Todas las empresas'});
   fillSelect($('#r-fe'),cfg.empresas,{placeholder:'Todas las empresas'});
+  fillSelect($('#lq-emp'),activos(cfg.empresas),{placeholder:'Se detecta sola'});
 }
 
 /* ---------- totales ---------- */
@@ -1804,6 +1817,11 @@ document.addEventListener('click',async ev=>{
   if(act==='pdf-periodo')return pdfPeriodo();
   if(act==='cancelar'){confirmKey=null;return render()}
   if(act==='resp-bajar')return respaldoCompleto();
+  if(act==='lq-go')return controlarLiq();
+  if(act==='lq-cargar')return lqCargar(id);
+  if(act==='lq-imp')return lqImp(id);
+  if(act==='lq-dec')return lqDec(id,b.dataset.tipo||'');
+  if(act==='lq-pdf')return pdfLiq();
   if(act==='del'){confirmKey=`del:${tipo}:${id}`;return render()}
   if(act==='rendir'){confirmKey='rendir:'+id;return render()}
   confirmKey=null;
@@ -1824,6 +1842,173 @@ document.addEventListener('click',async ev=>{
     render();
   }
 });
+
+/* ---------- control contra la liquidación de la empresa (FICS / Sisorg) ---------- */
+let LQ=null;
+const lqNum=s=>parseFloat(String(s).replace(/\./g,'').replace(',','.'))||0;
+const lqFecha=s=>{const m=String(s).match(/(\d{2})\/(\d{2})\/(\d{2,4})/);if(!m)return '';const y=m[3].length===2?'20'+m[3]:m[3];return `${y}-${m[2]}-${m[1]}`};
+const lqNorm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+async function cargarPdfjs(){
+  if(window.pdfjsLib)return window.pdfjsLib;
+  await new Promise((ok,ko)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';s.onload=ok;s.onerror=ko;document.head.appendChild(s)});
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  return window.pdfjsLib;
+}
+async function textoPdf(file){
+  const lib=await cargarPdfjs();const pdf=await lib.getDocument({data:await file.arrayBuffer()}).promise;const out=[];
+  for(let i=1;i<=pdf.numPages;i++){const pg=await pdf.getPage(i);const tc=await pg.getTextContent();out.push(tc.items.map(it=>it.str).join(' '))}
+  return out.join(' \n ');
+}
+function parseLiq(txt){
+  const t=String(txt).replace(/\s+/g,' ').replace(/(\d),\s(\d{2})(?!\d)/g,'$1,$2').replace(/(\d{2}\/\d{2}\/\d)\s(\d)(?=\s\d{2}:\d{2})/g,'$1$2').replace(/(\d{2}\/\d{2}\/)\s(\d{2})(?=\s\d{2}:\d{2})/g,'$1$2');
+  const emp=((t.match(/Empresa:\s*(.+?)\s+Boleter/i)||[])[1]||'').trim();
+  const per=t.match(/Desde:\s*(\d{2}\/\d{2}\/\d{2,4})(?:\s+(\d{2}:\d{2}))?\s*Hasta:\s*(\d{2}\/\d{2}\/\d{2,4})(?:\s+(\d{2}:\d{2}))?/i);
+  const nro=(t.match(/Liquidaci[oó]n:\s*(\d+)/i)||[])[1]||'';
+  const secs=[];const rs=/(Venta|Ventas|Anulaci[oó]n(?:es)?|Devoluci[oó]n(?:es)?|Cancelaci[oó]n(?:es)?)\s*\(\s*Moneda/gi;let s;
+  while((s=rs.exec(t)))secs.push({i:s.index,anul:!/^venta/i.test(s[1])});
+  const re=/(\d{2}\/\d{2}\/\d{2})(?!\d)\s+(\d{2}:\d{2})\s+(.*?)\s(-?\d{1,3}(?:\.\d{3})*,\d{2})\s+(-?\d{1,3},\d{2})\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})(?=\s|$)/g;
+  const rows=[];let m;
+  while((m=re.exec(t))){
+    const mid=m[3];
+    const sec=secs.filter(x=>x.i<m.index).pop();
+    const bol=mid.match(/\b([A-Z]{2,4}\s*-\s*\d{3,10}|\d{2,4}\s*-\s*\d{3,10})\b/);
+    const via=mid.match(/(\d{2}\/\d{2}\/\d{2})(?!\d)\s+(\d{2}:\d{2})/);
+    const med=mid.match(/(Efectivo|Tarjeta\s+de\s+D[eé]bito|Tarjeta\s+de\s+Cr[eé]dito|Tarjeta|D[eé]bito|Cr[eé]dito|Mercado\s*Pago|Transferencia|QR|Cuenta\s+corriente|Link\s+de\s+pago)/i);
+    let od='';if(bol){const tras=mid.slice(mid.indexOf(bol[0])+bol[0].length);const o=tras.match(/^\s*([A-ZÁÉÍÓÚÑ.]+(?:\s[A-ZÁÉÍÓÚÑ.]+)?\s*-\s*[A-ZÁÉÍÓÚÑ.]+(?:\s[A-ZÁÉÍÓÚÑ.]+)?)/);if(o)od=o[1].replace(/\s+/g,' ').trim()}
+    const tipo=med&&bol?mid.slice(mid.indexOf(med[0])+med[0].length,mid.indexOf(bol[0])).trim():'';
+    const imp=lqNum(m[4]);
+    rows.push({fecha:lqFecha(m[1]),hora:m[2],medio:med?med[1].replace(/\s+/g,' '):'',tipo,boleto:bol?bol[1].replace(/\s+/g,''):'',od,viaje:via?lqFecha(via[1]):'',importe:Math.abs(imp),pct:lqNum(m[5]),com:Math.abs(lqNum(m[6])),anul:imp<0||(sec&&sec.anul)||/anulad|devoluci/i.test(mid)});
+  }
+  return {emp,nro,desde:per?lqFecha(per[1]):'',hasta:per?lqFecha(per[3]):'',rows};
+}
+function lqMedio(txt){
+  const t=lqNorm(txt),ms=activos(cfg.medios),f=w=>ms.find(m=>lqNorm(m.nombre).includes(w));
+  if(/efectivo/.test(t))return f('efectivo');
+  if(/tarjeta|debito|credito/.test(t))return f('tarjeta')||f('debito')||f('credito');
+  if(/mercado|qr/.test(t))return f('qr')||f('mercado');
+  if(/transfer/.test(t))return f('transfer');
+  if(/link/.test(t))return f('link');
+  return null;
+}
+const esTarjeta=s=>/tarjeta|debito|credito|posnet/.test(lqNorm(s));
+async function controlarLiq(){
+  const msg=$('#lq-msg');msg.textContent='Leyendo la liquidación…';$('#lq-out').innerHTML='';
+  let txt=$('#lq-txt').value||'';
+  const f=$('#lq-file').files[0];
+  try{if(f)txt=await textoPdf(f)}catch(e){msg.innerHTML='<span class="mal">No pude leer ese PDF. Probá de nuevo, o copiá el texto de la página y pegalo.</span>';return}
+  const P=parseLiq(txt);
+  if(!P.rows.length){msg.innerHTML='<span class="mal">No encontré boletos en ese archivo. Tiene que ser la "Planilla de liquidación" de la empresa guardada en PDF.</span>';return}
+  let eid=$('#lq-emp').value;
+  if(!eid&&P.emp){const n=lqNorm(P.emp);const e=activos(cfg.empresas).find(x=>{const a=lqNorm(x.nombre);return a===n||n.includes(a)||a.includes(n)||a.replace(/ /g,'')===n.replace(/ /g,'')});if(e)eid=e.id}
+  if(!eid){msg.innerHTML=`<span class="mal">No reconocí la empresa${P.emp?` "${esc(P.emp)}"`:''}. Elegila en la lista y tocá Controlar de nuevo.</span>`;return}
+  $('#lq-emp').value=eid;
+  const emp=byId(cfg.empresas,eid);
+  const desde=P.desde||P.rows.map(r=>r.fecha).sort()[0],hasta=P.hasta||P.rows.map(r=>r.fecha).sort().pop();
+  msg.textContent='Comparando con lo cargado…';
+  const mapa=new Map();
+  try{const q=await db.collection('ventas').where('empresaId','==',eid).get();q.docs.forEach(x=>mapa.set(x.id,{id:x.id,...x.data()}))}catch(e){}
+  for(const v of ventas())if(v.empresaId===eid)mapa.set(v.id,v);
+  const todas=[...mapa.values()];
+  const porN=new Map();for(const v of todas){const n=numBol(v.boleto);if(n===null)continue;if(!porN.has(n))porN.set(n,[]);porN.get(n).push(v)}
+  const items=[],vistos=new Set(),liqVenta=new Set(),liqAnul=new Set();
+  for(const r of P.rows){const b=limpiarBol(eid,r.boleto),n=numBol(b);r.b=b;r.n=n;if(n!==null)(r.anul?liqAnul:liqVenta).add(n)}
+  for(const r of P.rows.filter(x=>!x.anul)){
+    const key='L'+r.n+'-'+r.fecha+'-'+r.importe;
+    const ms=r.n===null?[]:(porN.get(r.n)||[]),act=ms.filter(v=>!v.anulada&&v.tipo!=='devolucion');
+    if(act.length){const v=act.find(x=>!vistos.has(x.id))||act[0];vistos.add(v.id);
+      const dImp=r2((+v.importe||0)-r.importe);
+      if(Math.abs(dImp)>=1)items.push({cat:'imp',key,r,v,d:dImp});
+      else if(esTarjeta(r.medio)!==esTarjeta(v.medio||''))items.push({cat:'med',key,r,v});
+      else items.push({cat:'ok',key,r,v});
+    }else if(ms.some(v=>v.anulada||v.devuelto>0))items.push({cat:'anu',key,r,v:ms.find(v=>v.anulada||v.devuelto>0)});
+    else items.push({cat:'falta',key,r});
+  }
+  for(const v of todas){
+    if(vistos.has(v.id)||v.fecha<desde||v.fecha>hasta)continue;const n=numBol(v.boleto);
+    if(v.tipo==='devolucion'){const nr=numBol(v.refBoleto);if(!liqAnul.has(n)&&!(nr!==null&&liqAnul.has(nr)))items.push({cat:'dev',key:'D'+v.id,v});continue}
+    if(v.anulada||!(+v.importe>0))continue;
+    if(n===null||!liqVenta.has(n))items.push({cat:'sobra',key:'S'+v.id,v});
+  }
+  const lv=P.rows.filter(r=>!r.anul),la=P.rows.filter(r=>r.anul);
+  const tot={vend:r2(lv.reduce((s,r)=>s+r.importe,0)),anul:r2(la.reduce((s,r)=>s+r.importe,0)),com:r2(lv.reduce((s,r)=>s+r.com,0)-la.reduce((s,r)=>s+r.com,0))};
+  const app=todas.filter(v=>v.fecha>=desde&&v.fecha<=hasta&&!v.anulada),ta=sumar(app);
+  let dec={};try{dec=JSON.parse(LS.get('lq-dec')||'{}')}catch(e){}
+  LQ={eid,emp,P,desde,hasta,items,tot,app:{n:ta.n,total:ta.total,com:ta.com},dec};
+  msg.textContent='';pintarLiq();
+}
+const LQCAT={
+  falta:['Están en la liquidación y no en la app','La empresa los liquidó pero no están cargados. Si se vendieron, cargalos; si no, reclamá.'],
+  anu:['Anulados o devueltos en la app que la empresa cobra','Nosotros los anulamos o devolvimos, pero la empresa los liquida como vendidos. Reclamá a la empresa.'],
+  imp:['Importe distinto','El mismo boleto con distinto importe. Decidí si corregís la app o reclamás a la empresa.'],
+  sobra:['Cargados en la app que no están en la liquidación','Puede ser un número mal cargado, un boleto de otra empresa o una venta que la empresa no liquidó.'],
+  dev:['Devoluciones de la app que la liquidación no descuenta','Hicimos la devolución pero la empresa no la restó. Reclamá a la empresa.'],
+  med:['Medio de pago distinto (tarjeta / efectivo)','No cambia el total, pero importa si la empresa cobra las tarjetas por su lado.'],
+  ok:['Coinciden','Mismo número e importe.']};
+const DECTXT={reclamo:'A reclamar',ignorado:'Revisado, no hacer nada',cargado:'Cargado en la app',corregido:'Corregido en la app'};
+function lqFila(it){
+  const d=LQ.dec[(LQ.P.nro||'')+it.key],r=it.r,v=it.v,vs=activos(cfg.vendedoras),ms=activos(cfg.medios);
+  const datosL=r?`<span class="mono">${esc(r.b||r.boleto||'—')}</span> · ${dmy(r.fecha)} ${r.hora} · ${esc(r.od||'')} · ${esc(r.medio||'')} · <b>${fmt(r.importe)}</b>`:'';
+  const datosA=v?`<span class="mono">${esc(v.boleto)}</span> · ${dmy(v.fecha)} · ${esc(v.vendedora||'')} · ${esc(v.medio||'')} · <b>${fmt(v.importe)}</b>${v.anulada?' · anulado':''}`:'';
+  let det='',acc='';const K=esc(it.key);
+  if(it.cat==='falta'){det=`<div>Liquidación: ${datosL}</div>`;
+    const mm=lqMedio(r.medio),uv=(USR()&&USR().vendedoraId)||$('#v-vend').value;
+    acc=`<select data-lqv="${K}" aria-label="Vendedora">${vs.map(x=>`<option value="${esc(x.id)}"${x.id===uv?' selected':''}>${esc(x.nombre)}</option>`).join('')}</select><select data-lqm="${K}" aria-label="Medio">${ms.map(x=>`<option value="${esc(x.id)}"${mm&&x.id===mm.id?' selected':''}>${esc(x.nombre)}</option>`).join('')}</select><button class="btn small primary" data-act="lq-cargar" data-id="${K}">Cargar en la app</button><button class="btn small" data-act="lq-dec" data-id="${K}" data-tipo="reclamo">Reclamar</button>`}
+  else if(it.cat==='imp'){det=`<div>Liquidación: ${datosL}</div><div>App: ${datosA}</div><div class="${it.d>0?'mal':'hint'}">${it.d>0?`En la app tenemos ${fmt(it.d)} más que la empresa`:`La empresa liquida ${fmt(-it.d)} más que la app`}</div>`;
+    acc=`<button class="btn small" data-act="lq-imp" data-id="${K}">Poner en la app el importe de la empresa</button><button class="btn small" data-act="lq-dec" data-id="${K}" data-tipo="reclamo">Dejar el nuestro y reclamar</button>`}
+  else if(it.cat==='anu'){det=`<div>Liquidación: ${datosL}</div><div>App: ${datosA}${v.motivoAnulacion?' · '+esc(v.motivoAnulacion):''}</div>`;
+    acc=`<button class="btn small" data-act="lq-dec" data-id="${K}" data-tipo="reclamo">Reclamar a la empresa</button><button class="btn small" data-act="editar" data-id="${esc(v.id)}">Abrir el boleto</button>`}
+  else if(it.cat==='sobra'){det=`<div>App: ${datosA}</div>`;
+    acc=`<button class="btn small" data-act="editar" data-id="${esc(v.id)}">Abrir para corregir</button><button class="btn small" data-act="lq-dec" data-id="${K}" data-tipo="reclamo">Reclamar a la empresa</button>`}
+  else if(it.cat==='dev'){det=`<div>Devolución en la app: ${datosA}${v.refBoleto?' · del boleto '+esc(v.refBoleto):''}</div>`;
+    acc=`<button class="btn small" data-act="lq-dec" data-id="${K}" data-tipo="reclamo">Reclamar a la empresa</button>`}
+  else if(it.cat==='med'){det=`<div>Liquidación: ${datosL}</div><div>App: ${datosA}</div>`;
+    acc=`<button class="btn small" data-act="editar" data-id="${esc(v.id)}">Abrir el boleto</button>`}
+  else{det=`<div>${datosL}</div>`}
+  if(it.cat!=='ok')acc+=`<button class="btn small" data-act="lq-dec" data-id="${K}" data-tipo="ignorado">Está bien</button>`;
+  return `<div class="talrow"><div style="min-width:0;flex:1">${det}${d?`<div><span class="chip ${d==='reclamo'?'warn':''}">${DECTXT[d]||d}</span>${d!=='cargado'&&d!=='corregido'?` <button class="btn small" data-act="lq-dec" data-id="${K}" data-tipo="">Deshacer</button>`:''}</div>`:''}</div>${d?'':`<span class="row" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">${acc}</span>`}</div>`;
+}
+function pintarLiq(){
+  if(!LQ){$('#lq-out').innerHTML='';return}
+  const {emp,P,tot,app,items}=LQ,neto=r2(tot.vend-tot.anul-tot.com),netoA=r2(app.total-app.com);
+  const linea=(lab,a,b)=>{const d=r2(a-b);return `<dt>${lab}</dt><dd>${fmt(a)} <span class="${Math.abs(d)<1?'okc':'mal'}">${Math.abs(d)<1?'✓ igual que la app':`app ${fmt(b)} (dif. ${fmt(d)})`}</span></dd>`};
+  const grupos=Object.keys(LQCAT).map(c=>{const l=items.filter(i=>i.cat===c);if(!l.length)return '';const pend=l.filter(i=>!LQ.dec[(P.nro||'')+i.key]).length;
+    return `<details class="ctl"${c!=='ok'&&pend?' open':''}><summary><b>${LQCAT[c][0]}</b> <span class="chip ${c==='ok'?'':pend?'warn':''}">${l.length}</span>${c!=='ok'&&pend<l.length?` <span class="hint">${l.length-pend} resueltos</span>`:''}</summary><div class="hint">${LQCAT[c][1]}</div>${l.map(lqFila).join('')}</details>`}).join('');
+  const prob=items.filter(i=>i.cat!=='ok'&&i.cat!=='med').length;
+  $('#lq-out').innerHTML=`<div class="ticket" style="border-style:solid;border-color:var(--accent)"><header><h3>${esc(emp.nombre)}${P.nro?' · Liquidación N.º '+esc(P.nro):''}</h3><span class="chip">${dmy(LQ.desde)} al ${dmy(LQ.hasta)}</span></header>
+    <dl class="lines">${linea(`Vendido según la empresa (${P.rows.filter(r=>!r.anul).length} boletos)`,tot.vend,app.total+0)}${tot.anul?`<dt>Anulaciones según la empresa</dt><dd>− ${fmt(tot.anul)}</dd>`:''}${linea('Comisión',tot.com,app.com)}<dt class="tot">Neto a rendir según la empresa</dt><dd class="tot">${fmt(neto)} <span class="hint">app: ${fmt(netoA)}</span></dd></dl>
+    <div class="${prob?'mal':'okc'}">${prob?`Hay ${prob} diferencia${prob>1?'s':''} para revisar.`:'✓ Todo coincide boleto por boleto.'}</div>
+    <div class="row"><button class="btn small" data-act="lq-pdf">Descargar informe (PDF)</button><span class="hint">Lo de la app cuenta las ventas cargadas con fecha entre el ${dmy(LQ.desde)} y el ${dmy(LQ.hasta)}.</span></div></div>${grupos}`;
+}
+async function lqCargar(key){
+  const it=LQ.items.find(i=>i.key===key);if(!it||!puede())return;const r=it.r,emp=LQ.emp;
+  const vend=byId(cfg.vendedoras,(document.querySelector(`[data-lqv="${CSS.escape(key)}"]`)||{}).value),med=byId(cfg.medios,(document.querySelector(`[data-lqm="${CSS.escape(key)}"]`)||{}).value);
+  if(!vend||!med){toast('Elegí vendedora y medio de pago');return}
+  const er=validarBol(emp.id,r.b);if(er){toast(er);return}
+  const [y,mo,d]=r.fecha.split('-').map(Number),[hh,mi]=r.hora.split(':').map(Number);
+  try{await db.collection('ventas').add({fecha:r.fecha,ts:new Date(y,mo-1,d,hh,mi).getTime(),empresaId:emp.id,empresa:emp.nombre,boleto:r.b,serie:serAct(emp.id)||serIni(emp.id),destino:r.od||'',viaje:r.viaje||'',importe:r.importe,medioId:med.id,medio:med.nombre,tipo:'',canal:'',vendedoraId:vend.id,vendedora:vend.nombre,comisionPct:Number(emp.comision),comision:r2(r.importe*emp.comision/100),anulada:false,rendida:false,devolucionPend:false,rendicionId:null,origen:'liquidacion',cargaTarde:true,motivoTarde:'Cargada desde la liquidación de la empresa',historial:[{ts:Date.now(),quien:quien(),motivo:'Cargada desde la liquidación',detalle:`Liquidación ${LQ.P.nro||''} de ${emp.nombre}`,nota:''}]});
+    lqDec(key,'cargado');toast(`Boleto ${r.b} cargado`)}catch(e){fallo(e,'No se pudo cargar.')}
+}
+async function lqImp(key){
+  const it=LQ.items.find(i=>i.key===key);if(!it||!puede())return;const v=it.v,r=it.r;
+  if(v.rendida){toast('Ese boleto ya se rindió: cargá la diferencia como ajuste en "Descuentos y ajustes"');return}
+  try{await db.doc('ventas/'+v.id).update({importe:r.importe,comision:r2(r.importe*(+v.comisionPct||0)/100),historial:[...(v.historial||[]),{ts:Date.now(),quien:quien(),motivo:'Error de carga',detalle:`Importe ${fmt(v.importe)} → ${fmt(r.importe)} (según liquidación ${LQ.P.nro||''} de la empresa)`,nota:''}]});
+    lqDec(key,'corregido');toast('Importe corregido')}catch(e){fallo(e,'No se pudo guardar.')}
+}
+function lqDec(key,val){const k=(LQ.P.nro||'')+key;if(val)LQ.dec[k]=val;else delete LQ.dec[k];LS.set('lq-dec',JSON.stringify(LQ.dec));pintarLiq()}
+function pdfLiq(){
+  if(!LQ||!window.jspdf){toast('No cargó el generador de PDF. Recargá la página.');return}
+  const {emp,P,tot,app,items}=LQ;
+  const doc=nuevoPDF('Control de liquidación',`${emp.nombre}${P.nro?' · Liquidación N.º '+P.nro:''} · ${dmy(LQ.desde)} al ${dmy(LQ.hasta)}`);
+  let y=subt(doc,50,'Totales');
+  y=tablaPDF(doc,y,['','Según la empresa','Según la app','Diferencia'],[['Vendido',R(fmt(tot.vend)),R(fmt(app.total)),R(fmt(r2(tot.vend-app.total)))],['Comisión',R(fmt(tot.com)),R(fmt(app.com)),R(fmt(r2(tot.com-app.com)))],['Neto',R(fmt(r2(tot.vend-tot.anul-tot.com))),R(fmt(r2(app.total-app.com))),R(fmt(r2(tot.vend-tot.anul-tot.com-(app.total-app.com))))]]);
+  const dtx=i=>DECTXT[LQ.dec[(P.nro||'')+i.key]]||'Pendiente';
+  for(const c of ['falta','anu','imp','sobra','dev','med']){const l=items.filter(i=>i.cat===c);if(!l.length)continue;
+    y=subt(doc,y,LQCAT[c][0]+` (${l.length})`);
+    y=tablaPDF(doc,y,['Boleto','Fecha','Empresa','App','Qué se decidió'],l.map(i=>[(i.r&&(i.r.b||i.r.boleto))||(i.v&&i.v.boleto)||'-',dmy((i.r&&i.r.fecha)||(i.v&&i.v.fecha)),i.r?fmt(i.r.importe):'-',i.v?fmt(i.v.importe)+(i.v.anulada?' (anulado)':''):'-',dtx(i)]))}
+  const rec=items.filter(i=>LQ.dec[(P.nro||'')+i.key]==='reclamo');
+  if(rec.length){y=subt(doc,y,'Para reclamar a la empresa');y=tablaPDF(doc,y,['Boleto','Fecha','Motivo'],rec.map(i=>[(i.r&&(i.r.b||i.r.boleto))||(i.v&&i.v.boleto),dmy((i.r&&i.r.fecha)||(i.v&&i.v.fecha)),LQCAT[i.cat][0]]))}
+  guardarPDF(doc,`control-liquidacion-${slug(emp.nombre)}-${P.nro||LQ.hasta}.pdf`);
+}
 
 /* ---------- respaldo completo ---------- */
 const COLS_RESP=['config','ventas','rendiciones','ajustes','planes','movimientos'];
